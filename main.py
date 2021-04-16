@@ -6,6 +6,7 @@ import torch.optim as optim
 import os
 import data
 import models
+import torch.nn.functional as F
 
 
 
@@ -70,6 +71,68 @@ def train_model(model,train_loader, valid_loader, criterion, optimizer, num_epoc
             best_acc = valid_acc
             best_model = model
             torch.save(best_model, 'best_model.pt')
+
+def semi_supervised_train_model(model, mean_teacher, train_loader, valid_loader, optimizer, num_epochs=20):
+
+    def semi_supervised_train(model, mean_teacher, train_loader, valid_loader, optimizer, epoch):
+        for batch_index, (inputs,labels) in enumerate(train_loader):
+            optimizer.zero_grad()
+            output = model(inputs)
+
+            with torch.no_grad():
+                mean_teacher_output = mean_teacher(inputs)
+
+            # consistency loss
+            consistency_loss = F.mse_loss(output, mean_teacher_output)
+            weight = 0.2
+            loss = F.nll_loss(output, labels) + weight * consistency_loss
+            loss.backward()
+            optimizer.step()
+
+            # update mean teacher, (should choose alpha somehow)
+           # Use the true average until the exponential average is more correct
+            alpha = 0.95
+            for mean_teacher_param, param in zip(mean_teacher.parameters(), model.parameters()):
+                mean_param.data.mul_(alpha).add_(1 - alpha, param.data)
+
+            if batch_index % 50 == 0:
+                print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
+                    epoch, batch_idx * len(data), len(train_loader.dataset),
+                           100. * batch_idx / len(train_loader), loss.item()))
+                semi_supervised_test(model, test_loader)
+                semi_supervised_test(mean_teacher, test_loader)
+    
+    def semi_supervised_test(model, mean_teacher, test_loader):
+        model.eval()
+        test_loss = 0
+        correct = 0
+        with torch.no_grad():
+            for inputs, labels in test_loader:
+                #data, target = data.to(device), target.to(device)
+                output = model(data)
+                test_loss += F.nll_loss(output, labels, reduction='sum').item()  # sum up batch loss
+                pred = output.argmax(dim=1, keepdim=True)  # get the index of the max log-probability
+                correct += pred.eq(labels.view_as(pred)).sum().item()
+
+        test_loss /= len(test_loader.dataset)
+
+        print('\nTest set: Average loss: {:.4f}, Accuracy: {}/{} ({:.0f}%)\n'.format(
+            test_loss, correct, len(test_loader.dataset),
+            100. * correct / len(test_loader.dataset)))
+        model.train()
+
+    for epoch in range(num_epochs):
+        print('epoch:{:d}/{:d}'.format(epoch, num_epochs))
+        print('*' * 100)
+        train_loss, train_acc = semi_supervised_train(model, mean_teacher ,train_loader,valid_loader,optimizer,epoch)
+        print("training: {:.4f}, {:.4f}".format(train_loss, train_acc))
+        valid_loss, valid_acc = valid(model, valid_loader,criterion)
+        print("validation: {:.4f}, {:.4f}".format(valid_loss, valid_acc))
+        if valid_acc > best_acc:
+            best_acc = valid_acc
+            best_model = model
+            torch.save(best_model, 'semi_unsupervised_best_model.pt')
+
 
 
 if __name__ == '__main__':
