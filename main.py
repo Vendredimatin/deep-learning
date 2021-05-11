@@ -1,166 +1,164 @@
-import sys
-#sys.path.append('/Users/liuhanyi/Desktop/课程学习/研一下学期/深度学习/dl_2021_hw2/hw2_start_code/src')
+# coding: utf-8
+import argparse
+import math
 import torch
 import torch.nn as nn
-import torch.optim as optim
-import os
-import data
-import models
-import torch.nn.functional as F
+import time
+
+
+from data import Corpus
+from Transformer import TransformerModel
+from RNN import RNNModel
+
+
+parser = argparse.ArgumentParser(description='PyTorch Language Model')
+parser.add_argument('--epochs', type=int, default=40,
+                    help='upper epoch limit')
+parser.add_argument('--train_batch_size', type=int, default=20, metavar='N',
+                    help='batch size')
+parser.add_argument('--eval_batch_size', type=int, default=10, metavar='N',
+                    help='eval batch size')
+parser.add_argument('--bptt', type=int, default=35, metavar='N',
+                    help='sequence length')
+parser.add_argument('--seed', type=int, default=1234,
+                    help='set random seed')
+
+args = parser.parse_args()
+
+# Set the random seed manually for reproducibility.
+torch.manual_seed(args.seed)
+
+# load data
+data_loader = Corpus(train_batch_size=args.train_batch_size,
+                     eval_batch_size=args.eval_batch_size,
+                     bptt=args.bptt)
 
 
 
+# WRITE CODE HERE within two '#' bar
+########################################
+# bulid your language model here
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+nvoc = data_loader.get_ntokens()
+model = RNNModel(nvoc,128,128,2)
+#model = TransformerModel(nvoc,ninp=128,nhead=8,nhid=128,nlayers=4)
+model = model.to(device)
+#print(model)
+########################################
+isRNN = True
 
-## Note that: here we provide a basic solution for training and validation.
-## You can directly change it if you find something wrong or not good enough.
+criterion = nn.CrossEntropyLoss()
+lr = 1  # learning rate
+optimizer = torch.optim.SGD(model.parameters(), lr=lr)
+scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1.0, gamma=0.95)
 
-def train_model(model,train_loader, valid_loader, criterion, optimizer, num_epochs=20):
+def repackage_hidden(h):
+    """Wraps hidden states in new Tensors, to detach them from their history."""
 
-    def train(model, train_loader,optimizer,criterion):
-        model.train(True)
-        total_loss = 0.0
-        total_correct = 0
+    if isinstance(h, torch.Tensor):
+        return h.detach()
+    else:
+        return tuple(repackage_hidden(v) for v in h)
 
-        isAugmented = False
-        for inputs, labels in train_loader:
-            inputs = inputs.to(device)
-            labels = labels.to(device)
-            optimizer.zero_grad()
-            outputs = model(inputs)
-            loss = criterion(outputs, labels)
-            _, predictions = torch.max(outputs, 1)
-            loss.backward()
-            optimizer.step()
+def train():
+    #model.train() # Turn on the train mode
+    total_loss = 0.
+    start_time = time.time()#
+    log_interval = 200
+    if isRNN:
+        hidden = model.init_hidden(args.train_batch_size)
+    for batch, i in enumerate(range(0, data_loader.train_data.size(0) - 1, args.bptt)):
+        data, targets = data_loader.get_batch(data_loader.train_data, i)
+        data = data.to(device)
+        targets = targets.to(device)
+        optimizer.zero_grad()
 
-            total_loss += loss.item() * inputs.size(0)
-            total_correct += torch.sum(predictions == labels.data)
-            print('train total_correct:{:.5f}'.format(total_correct))
+        #output就是所有时间序列对应的输出集合，所以直接与target进行比较即可
+        ########################################
+        ######Your code here########
+        ########################################
+        if isRNN:
+            hidden = repackage_hidden(hidden)
+            output,hidden = model(data, hidden)
+        #output = model(data)
+        loss = criterion(output.view(-1,nvoc), targets.view(-1))
+        loss.backward()
+        optimizer.step()
+        #scheduler.step()
 
-        epoch_loss = total_loss / len(train_loader.dataset)
-        epoch_acc = total_correct.double() / len(train_loader.dataset)
-        return epoch_loss, epoch_acc.item()
+        total_loss += loss.item() * data.size(0)
 
-    def valid(model, valid_loader,criterion):
-        model.train(False)
-        total_loss = 0.0
-        total_correct = 0
-        for inputs, labels in valid_loader:
-            inputs = inputs.to(device)
-            labels = labels.to(device)
-            outputs = model(inputs)
-            loss = criterion(outputs, labels)
-            _, predictions = torch.max(outputs, 1)
-            total_loss += loss.item() * inputs.size(0)
-            total_correct += torch.sum(predictions == labels.data)
-            print('valid total_correct:{:.5f}'.format(total_correct))
+        if batch % log_interval == 0 and batch > 0:
+            cur_loss = total_loss / log_interval
+            elapsed = time.time() - start_time
+            print('| epoch {:3d} | {:5d}/{:5d} batches | '
+                  'lr {:02.2f} | ms/batch {:5.2f} | '
+                  'loss {:5.2f} | ppl {:8.2f}'.format(
+                    epoch, batch, len(data_loader.train_data) // args.bptt, scheduler.get_last_lr()[0],
+                    elapsed * 1000 / log_interval,
+                    cur_loss, math.exp(cur_loss)))
+            total_loss = 0
+            start_time = time.time()
 
 
-        epoch_loss = total_loss / len(valid_loader.dataset)
-        epoch_acc = total_correct.double() / len(valid_loader.dataset)
-        return epoch_loss, epoch_acc.item()
+# WRITE CODE HERE within two '#' bar
+########################################
+# Evaluation Function
+# Calculate the average cross-entropy loss between the prediction and the ground truth word.
+# And then exp(average cross-entropy loss) is perplexity.
 
-    best_acc = 0.0
-    for epoch in range(num_epochs):
-        print('epoch:{:d}/{:d}'.format(epoch, num_epochs))
-        print('*' * 100)
-        train_loss, train_acc = train(model, train_loader,optimizer,criterion)
-        print("training: {:.4f}, {:.4f}".format(train_loss, train_acc))
-        valid_loss, valid_acc = valid(model, valid_loader,criterion)
-        print("validation: {:.4f}, {:.4f}".format(valid_loss, valid_acc))
-        if valid_acc > best_acc:
-            best_acc = valid_acc
-            best_model = model
-            torch.save(best_model, 'best_model.pt')
-
-def semi_supervised_train_model(model, mean_teacher, train_loader, valid_loader, optimizer, num_epochs=20):
-
-    def semi_supervised_train(model, mean_teacher, train_loader, valid_loader, optimizer, epoch):
-        for batch_index, (inputs,labels) in enumerate(train_loader):
-            optimizer.zero_grad()
-            output = model(inputs)
-
-            with torch.no_grad():
-                mean_teacher_output = mean_teacher(inputs)
-
-            # consistency loss
-            consistency_loss = F.mse_loss(output, mean_teacher_output)
-            weight = 0.2
-            loss = F.nll_loss(output, labels) + weight * consistency_loss
-            loss.backward()
-            optimizer.step()
-
-            # update mean teacher, (should choose alpha somehow)
-           # Use the true average until the exponential average is more correct
-            alpha = 0.95
-            for mean_teacher_param, param in zip(mean_teacher.parameters(), model.parameters()):
-                mean_param.data.mul_(alpha).add_(1 - alpha, param.data)
-
-            if batch_index % 50 == 0:
-                print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
-                    epoch, batch_idx * len(data), len(train_loader.dataset),
-                           100. * batch_idx / len(train_loader), loss.item()))
-                semi_supervised_test(model, test_loader)
-                semi_supervised_test(mean_teacher, test_loader)
-    
-    def semi_supervised_test(model, mean_teacher, test_loader):
-        model.eval()
-        test_loss = 0
-        correct = 0
-        with torch.no_grad():
-            for inputs, labels in test_loader:
-                #data, target = data.to(device), target.to(device)
+def evaluate(eval_model, data_source):
+    eval_model.eval() # Turn on the evaluation mode
+    total_loss = 0.
+    if isRNN:
+        hidden = model.init_hidden(args.eval_batch_size)
+    with torch.no_grad():
+        for i in range(0, data_source.size(0) - 1, args.bptt):
+            data, targets = data_loader.get_batch(data_source, i)
+            data = data.to(device)
+            targets = targets.to(device)
+            ########################################
+            ######Your code here########
+            ########################################
+            if isRnn:
+                hidden = repackage_hidden(hidden)
+                output,hidden = model(hidden)
+            else:
                 output = model(data)
-                test_loss += F.nll_loss(output, labels, reduction='sum').item()  # sum up batch loss
-                pred = output.argmax(dim=1, keepdim=True)  # get the index of the max log-probability
-                correct += pred.eq(labels.view_as(pred)).sum().item()
+            output = output.view(-1, nvoc)
+            loss = criterion(output, targets.view(-1))
 
-        test_loss /= len(test_loader.dataset)
-
-        print('\nTest set: Average loss: {:.4f}, Accuracy: {}/{} ({:.0f}%)\n'.format(
-            test_loss, correct, len(test_loader.dataset),
-            100. * correct / len(test_loader.dataset)))
-        model.train()
-
-    for epoch in range(num_epochs):
-        print('epoch:{:d}/{:d}'.format(epoch, num_epochs))
-        print('*' * 100)
-        train_loss, train_acc = semi_supervised_train(model, mean_teacher ,train_loader,valid_loader,optimizer,epoch)
-        print("training: {:.4f}, {:.4f}".format(train_loss, train_acc))
-        valid_loss, valid_acc = valid(model, valid_loader,criterion)
-        print("validation: {:.4f}, {:.4f}".format(valid_loss, valid_acc))
-        if valid_acc > best_acc:
-            best_acc = valid_acc
-            best_model = model
-            torch.save(best_model, 'semi_unsupervised_best_model.pt')
+            total_loss += loss.item() * len(data)
+    return total_loss/(len(data_source) - 1)
 
 
 
-if __name__ == '__main__':
-    os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
-    ## about model
-    num_classes = 10
+# Train Function
+best_val_loss = float("inf")
+best_model = None
 
-    ## about data
-    data_dir = "../hw2_dataset/" ## You need to specify the data_dir first
-    inupt_size = 224
-    batch_size = 36
+for epoch in range(1, args.epochs + 1):
+    epoch_start_time = time.time()
+    train()
+    val_loss = evaluate(model, data_loader.val_data)
+    print('-' * 89)
+    print('| end of epoch {:3d} | time: {:5.2f}s | valid loss {:5.2f} | '
+          'valid ppl {:8.2f}'.format(epoch, (time.time() - epoch_start_time),
+                                     val_loss, math.exp(val_loss)))
+    print('-' * 89)
 
-    ## about training
-    num_epochs = 50
-    lr = 0.005
+    if val_loss < best_val_loss:
+        best_val_loss = val_loss
+        best_model = model
 
-    ## model initialization
-    model = models.model_B(num_classes=num_classes)
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    model = model.to(device)
+    scheduler.step()
 
-    ## data preparation
-    train_loader, valid_loader = data.load_data(data_dir=data_dir,input_size=inupt_size, batch_size=batch_size)
+########################################
 
-    ## optimizer
-    optimizer = optim.SGD(model.parameters(), lr=lr, momentum=0.9)
-
-    ## loss function
-    criterion = nn.CrossEntropyLoss()
-    train_model(model,train_loader, valid_loader, criterion, optimizer, num_epochs=num_epochs)
+test_loss = evaluate(best_model, data_loader.test_data)
+print('=' * 89)
+print('| End of training | test loss {:5.2f} | test ppl {:8.2f}'.format(
+    test_loss, math.exp(test_loss)))
+print('=' * 89)
+torch.save(best_model, 'transformers_epoch_40.pt')
